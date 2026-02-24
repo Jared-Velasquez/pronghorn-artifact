@@ -10,3 +10,4 @@ kubeconfig
 minio.yaml
 multipass.yaml
 data/
+test/
