@@ -5,3 +5,8 @@ data/python-evaluation.csv
 *.log
 Plot.ipynb
 *.out
+.credentials
+kubeconfig
+minio.yaml
+multipass.yaml
+data/

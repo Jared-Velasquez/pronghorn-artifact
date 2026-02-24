@@ -103,13 +103,23 @@ echo "[Completed] Kuberentes cluster created with $nodes nodes, $cpus CPUs, $mem
 export KUBECONFIG="$DIR/kubeconfig"
 
 # Install OpenFaaS
-arkade install openfaas --set faasnetes.image=skharban/faas-netes:privileged-containers &> /dev/null
+# arkade install openfaas --set faasnetes.image=skharban/faas-netes:privileged-containers &> /dev/null
+arkade install openfaas \
+  --set openfaasPro=false \
+  --set operator.create=false \
+  --set faasnetes.image=skharban/faas-netes:privileged-containers &> /dev/null
+
 if kubectl get namespace openfaas &> /dev/null; then
     echo "[Completed] OpenFaaS Installed."
 else
     echo "[Error] OpenFaaS Installation Unsuccessful."
     exit 1
 fi
+
+# Create empty openfaas-license secret if it doesn't exist
+# kubectl get secret openfaas-license -n openfaas &>/dev/null || \
+#   kubectl create secret generic openfaas-license -n openfaas --from-literal=license=""
+
 
 # Ensure gateway rollout is complete
 while true; do
