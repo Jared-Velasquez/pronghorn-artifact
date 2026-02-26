@@ -10,3 +10,5 @@ kubeconfig
 minio.yaml
 multipass.yaml
 data/
+test/
+**/.DS_Store

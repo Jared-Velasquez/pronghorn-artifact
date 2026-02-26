@@ -13,6 +13,7 @@ class Checkpoint(object):
         bucket: str = "checkpoints",
         client: Minio = None,
     ) -> None:
+        # TODO: add parent_path and other incremnetal delta metadata to Checkpoint
         super().__init__()
         self.bucket = bucket
         self.path = path  # MinIO path prefix
