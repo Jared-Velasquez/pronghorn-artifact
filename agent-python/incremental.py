@@ -41,7 +41,35 @@ class IncrementalChain:
         
         """
 
-        pass
+        # Walk from leaf to root, collecting the chain in reverse order
+        path_index = {c.path: c for c in pool}
+        chain = []
+        current = checkpoint
+        while current is not None:
+            chain.append(current)
+            current = path_index.get(current.parent_path) if current.parent_path else None
+        chain.reverse()  # now ordered root -> ... -> leaf
+
+        # Download each entry and create parent symlinks
+        prev_local_dir = None
+        for entry in chain:
+            local_dir = os.path.join(self.base_dir, entry.path)
+            os.makedirs(local_dir, exist_ok=True)
+
+            objects = client.list_objects("checkpoints", prefix=entry.path, recursive=True)
+            for obj in objects:
+                filename = obj.object_name.split("/", maxsplit=1)[1]
+                client.fget_object("checkpoints", obj.object_name, os.path.join(local_dir, filename))
+
+            if prev_local_dir is not None:
+                parent_name = os.path.basename(prev_local_dir)
+                os.symlink(f"../{parent_name}", os.path.join(local_dir, "parent"))
+
+            self.entries.append(local_dir)
+            prev_local_dir = local_dir
+
+        self.restore_dir = prev_local_dir
+        return self.restore_dir
 
     def clear_soft_dirty(self, pid):
         """Write 4 to /proc/{pid}/clear_refs to reset page tracking.
@@ -94,12 +122,22 @@ class IncrementalChain:
 
         return total_size
 
-    def get_chain_depth(self, checkpoint: Checkpoint, pool: List[Checkpoint]):
+    def get_chain_depth(self, checkpoint: Checkpoint, pool: List[Checkpoint]) -> int:
         """Walk parent_path chain to compute depth of a checkpoint"""
 
-        pass
+        depth = 0
+        current = checkpoint
+        path_index = {c.path: c for c in pool}
 
-    def is_full_dump(self):
+        while current.parent_path is not None:
+            current = path_index[current.parent_path]
+            depth += 1
+
+        return depth
+
+    def is_full_dump(self) -> bool:
         """Whether the next dump will be full (no parent) or incremental"""
 
-        pass
+        # TODO: how can we support performing full dumps in the middle of a chain?
+        # Good for performance optimization (e.g. if chain length is 200, might want to do a full dump at 100 instead of incremental dumps for the next 100 checkpoints)
+        return len(self.entries) == 0
