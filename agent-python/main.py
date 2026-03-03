@@ -17,6 +17,23 @@ from datetime import datetime
 LOG_FNAME = "requestLog.txt"
 CHECKPOINTS_BUCKET = "checkpoints"
 
+# What does main.py do?
+
+# entry point for the agent process; runs as a sidecar alongside the actual function.
+# Performs three things:
+
+# 1. Startup: calls on_container_started() in orchestrator.py. If the orchestrator says
+# from_checkpoint = True, then main.py will download the checkpoint from MinIO and restore it using CRIU.
+# Otherwise, it will cold-start a fresh pypy3 process.
+
+# 2. Request monitoring loop (after init() called): polls a requestLog.txt file every 10ms; when the function
+# # writes a latency to that file, main.py picks it up and calls after_request(latency) 
+
+# 3. after_request: calls on_container_request(latency) in orchestrator.py. If the response says
+# should_checkpoint = True, then main.py will checkpoint the function using CRIU at the returned
+# checkpoint_location path, then calls on_container_checkpoint(checkpoint_location) in orchestrator.py to register it. 
+# If the response says should_evict = True, kill the process
+
 
 client: Minio = None
 

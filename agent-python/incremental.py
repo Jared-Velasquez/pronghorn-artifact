@@ -24,7 +24,7 @@ from minio import Minio
 
 # ------------------------------------
 
-# Dump Flow:
+# Dump Flow (build_dump_cmd() -> run cmd -> upload_entry()) in orchestrator.py:
 
 # First dump: full dump (entries is empty); create a new IncrementalChain
 # Second dump: incremental (len(entries) = 1 < max_depth=5)
@@ -33,7 +33,7 @@ from minio import Minio
 
 # ------------------------------------
 
-# Restore flow (setup_for_restore):
+# Restore flow (setup_for_restore() -> build_restore_cmd() -> run cmd) in orchestrator.py:
 
 # How to restore uuid_C? Call setup_for_restore with checkpoint C; it will walk parent_path links
 # to build the chain [C, B, A], then reverse it [A, B, C]
