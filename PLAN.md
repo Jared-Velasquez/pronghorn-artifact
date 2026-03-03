@@ -6,7 +6,7 @@ Pronghorn maintains a pool of CRIU checkpoints at various invocation counts. Cur
 
 ---
 
-## Step 1 (Jared): Fix `IncrementalChain` bugs and gaps
+## Step 1 (Jared, DONE): Fix `IncrementalChain` bugs and gaps
 
 **Why:** The `IncrementalChain` class is the core data structure that manages the chain of parent-to-child checkpoint relationships, constructs CRIU dump/restore commands with the correct incremental flags, and handles uploading/downloading checkpoint files. Without fixing its bugs — broken chain traversal, incomplete file uploads, missing CRIU command builders, and no max-depth enforcement — incremental dumps would either fail to produce valid CRIU images, fail to restore, or grow unbounded chains that degrade restore performance.
 
@@ -52,7 +52,7 @@ CRIU automatically follows `parent` symlinks during restore — no extra flags n
 
 ---
 
-## Step 2 (Jared): Add incremental mode to the configuration/strategy layer
+## Step 2 (Jared, DONE): Add incremental mode to the configuration/strategy layer
 
 **Why:** The strategy configuration system is how the agent learns which orchestration mode to use. Currently, `cr_deserialize` in `utils.py` parses the ENV strategy string to instantiate strategy objects, and `RequestCentricStrategy` serializes/deserializes its parameters across container lifecycles. Neither has any concept of `incremental` or `max_chain_depth`. Without wiring these parameters through the configuration layer, the agent will never know incremental mode is enabled — Steps 1, 3–5 build all the machinery but nothing ever turns it on.
 
@@ -273,6 +273,39 @@ However, the paper's entire contribution demonstrates that a diverse checkpoint 
 **The value proposition of incremental deltas is not to compete with capacity reduction, but to make it unnecessary.** Incremental deltas achieve `C=2`-level storage costs (~215MB vs ~660MB, a ~67% reduction) while preserving `C=12`-level checkpoint diversity and latency. The correct comparison is always at the same `C`: same number of restore points, same latency characteristics, but dramatically less storage per checkpoint.
 
 **Key evaluation implication:** Step 6's benchmarks must compare at the same `C` to be meaningful. If we also include a `C=2` full-dump baseline, we should report both storage *and* latency to show that our incremental system at `C=12` achieves comparable storage to `C=2` full dumps without the latency penalty.
+
+### Chain-level pruning degrades pool diversity
+
+**The problem:** Step 5b proposes pruning at the chain level — keeping or discarding entire chain-families as units. With `C=12` and `max_chain_depth=5`, a chain of depth 5 consumes 5 pool slots (1 full dump root + 4 incremental deltas). The pool can hold at most 2 independent chains of length 5 (10 slots) plus 2 loose checkpoints. The structure is actually a forest of trees, not independent linear chains, since multiple containers can restore from the same checkpoint and branch — so the pool likely contains 2–3 tree roots with various branch depths.
+
+Pronghorn's pruning algorithm scores each checkpoint individually, keeps the top `p=40%` by performance, and randomly samples `gamma=10%` from the rest for exploration. With 12 independent full dumps, that's 12 individually scorable, individually prunable units — maximum diversity and exploration surface. Chain-level pruning collapses this to 2–3 pruning units. "Keep top 40%" becomes "keep 1 tree." Exploration is effectively dead — the system locks into whichever chain-family scored well early, undermining Pronghorn's core exploration-exploitation mechanism.
+
+**Possible mitigations:**
+
+1. **Leaf-only pruning** — only prune checkpoints with no children. Chain integrity is guaranteed by construction. Roots and intermediates are "pinned" while they have descendants but become prunable once their children are removed. This recovers per-checkpoint granularity on the frontier of each tree.
+
+2. **Shorter max depth (2–3 instead of 5)** — more roots, more independent pruning units. With depth 2 and `C=12`, ~6 roots exist, much closer to original pruning dynamics. Less storage savings per chain.
+
+3. **Hybrid pool** — reserve some slots for independent full dumps (freely prunable for exploration) and some for incremental chains (storage savings on proven high-performers).
+
+4. **Promote-on-prune** — when deleting a parent, merge its pages into one child to make it a standalone full dump. Expensive (requires CRIU `dedup` or manual page merging) but fully preserves diversity.
+
+#### Leaf-only pruning: advantages and disadvantages
+
+**Advantages:**
+- Recovers per-checkpoint granularity on the pool frontier — any leaf can be individually scored and pruned, preserving Pronghorn's exploration-exploitation dynamics far better than chain-level pruning.
+- Chain integrity is guaranteed by construction: you never delete a node that has children, so no descendant is ever orphaned. No need for cascade-delete logic or chain-grouping (Step 5a/5b simplifies significantly).
+- Simple to implement — a single `has_children(checkpoint, pool)` check before allowing deletion.
+- Graceful degradation: even if some slots are pinned, the remaining prunable leaves still provide meaningful diversity compared to the 2–3 pruning units of chain-level pruning.
+
+**Disadvantages:**
+- Roots and intermediate nodes are "pinned" — they occupy pool slots but cannot be removed while they have descendants. This is dead weight: unprunable checkpoints that may have poor performance scores but still consume capacity.
+- Slow reclamation: freeing a depth-5 chain takes up to 5 pruning rounds (peel one leaf per round). If the pool is full of deep chains with pinned intermediates, it may take many rounds before enough capacity is freed for new exploration.
+- A poorly-performing root that spawned many branches cannot be removed until *all* its descendants are pruned first — even if the root is the worst checkpoint in the pool. The pruning algorithm must work around it.
+- Can lead to pool stagnation: if most checkpoints are pinned intermediates, the effective number of prunable candidates shrinks, reducing the pruning algorithm's ability to make room for new checkpoints. In the worst case (all chains at max depth, heavy branching), nearly all pool slots could be pinned.
+- Storage reclamation is gradual rather than immediate — if a burst of new checkpoints demands space, leaf-only pruning may not free slots fast enough, potentially requiring a fallback to chain-level or cascade pruning.
+
+**Recommendation:** Leaf-only pruning is the strongest starting point — it's simple, safe, and preserves the most diversity. Shorter `max_chain_depth` (2–3) further mitigates the pinning and slow-reclamation downsides by limiting how much dead weight any single chain can create. The combination of leaf-only pruning + low max depth likely captures most of the storage savings while preserving most of the pool diversity. Step 6 benchmarks should compare chain-level vs. leaf-only pruning at various depths to quantify the tradeoff empirically.
 
 ---
 

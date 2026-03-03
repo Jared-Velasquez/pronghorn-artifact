@@ -6,24 +6,56 @@ from orchestration.checkpoint import Checkpoint
 
 from minio import Minio
 
-# https://criu.org/index.php?title=Memory_changes_tracking
-# How to track memory changes (pages of 4KB)?
-# Step 1: ask the kernel to keep track of memory changes (by writing 4 into /proc/{pid}/clear_refs file for each 
-# pid we're interested in)
+# How does this look in MinIO?
 
-# after a while...
+# MinIO checkpoints bucket:
+# uuid_1/
+#   ...
+#   .img files
+# uuid_2/
+#   ...
+#   .img files
 
-# Step 2: get the list of modified pages of a process by reading its /proc/{pid}/pagemap file and look at the
-# soft-dirty bit in the pagemap entries
+# parent-child chain lives in the Checkpoint objects in the pool:
+
+# Checkpoint(path="uuid_A", parent_path=None); full dump, root of chain
+# Checkpoint(path="uuid_B", parent_path="uuid_A"); child of uuid_A
+# Checkpoint(path="uuid_C", parent_path="uuid_B"); child of uuid_B
+
+# ------------------------------------
+
+# Dump Flow (build_dump_cmd() -> run cmd -> upload_entry()) in orchestrator.py:
+
+# First dump: full dump (entries is empty); create a new IncrementalChain
+# Second dump: incremental (len(entries) = 1 < max_depth=5)
+# ...
+# Sixth dump: full dump (len(entries) = 5 >= max_depth=5); must create a new IncrementalChain
+
+# ------------------------------------
+
+# Restore flow (setup_for_restore() -> build_restore_cmd() -> run cmd) in orchestrator.py:
+
+# How to restore uuid_C? Call setup_for_restore with checkpoint C; it will walk parent_path links
+# to build the chain [C, B, A], then reverse it [A, B, C]
+
+# Then download + create symlinks:
+# Download A to ./chain/uuid_A
+# Download B to ./chain/uuid_B, create symlink ./chain/uuid_B/parent -> ../uuid_A
+# Download C to ./chain/uuid_C, create symlink ./chain/uuid_C/parent -> ../uuid_B
+
+# setup_for_restore will return ./chain/uuid_C as the restore_dir, and the 
+# CRIU restore command will automatically follow parent symlinks to find the 
+# full chain of images (CRIU specifically looks for a symlink called parent inside the image directory)
 
 class IncrementalChain:
-    """Manages a local chain of CRIU checkpoint directories"""
+    """Manages a SINGLE local chain of CRIU checkpoint directories"""
 
-    def __init__(self, base_dir="./chain"):
+    def __init__(self, base_dir="./chain", max_depth=5):
         self.base_dir = base_dir
         self.entries = []
         self.restore_dir = None
         self.restored_depth = 0
+        self.max_depth = max_depth
 
     def setup_for_restore(self, client: Minio, checkpoint: Checkpoint, pool: List[Checkpoint]):
         """Download full ancestor chain from MinIO for this checkpoint
@@ -62,18 +94,19 @@ class IncrementalChain:
                 client.fget_object("checkpoints", obj.object_name, os.path.join(local_dir, filename))
 
             if prev_local_dir is not None:
-                parent_name = os.path.basename(prev_local_dir)
-                os.symlink(f"../{parent_name}", os.path.join(local_dir, "parent"))
+                rel = os.path.relpath(prev_local_dir, local_dir)
+                os.symlink(rel, os.path.join(local_dir, "parent"))
 
             self.entries.append(local_dir)
             prev_local_dir = local_dir
 
         self.restore_dir = prev_local_dir
+        self.restored_depth = len(chain) - 1  # root is depth 0
         return self.restore_dir
 
     def clear_soft_dirty(self, pid):
-        """Write 4 to /proc/{pid}/clear_refs to reset page tracking.
-        Called immediately after criu restore succeeds"""
+        """Reset all soft-dirty bits so the next dump tracks only new changes
+        from the immediately previous dump"""
 
         clear_refs_path = Path(f"/proc/{pid}/clear_refs")
         try:
@@ -93,17 +126,16 @@ class IncrementalChain:
         
         for root, dirs, files in os.walk(entry_dir):
             for file in files:
-                if file.startswith("pages-") and file.endswith(".img"):
-                    local_path = os.path.join(root, file)
+                local_path = os.path.join(root, file)
 
-                    try:
-                        client.fput_object(
-                            bucket_name="checkpoints",
-                            object_name=os.path.join(minio_path, file),
-                            file_path=local_path
-                        )
-                    except Exception as e:
-                        print(f"Error uploading {local_path} to MinIO: {e}")
+                try:
+                    client.fput_object(
+                        bucket_name="checkpoints",
+                        object_name=os.path.join(minio_path, file),
+                        file_path=local_path
+                    )
+                except Exception as e:
+                    print(f"Error uploading {local_path} to MinIO: {e}")
 
     def get_entry_size(self, entry_dir):
         """Return total bytes of pages-*.img in entry_dir"""
@@ -116,7 +148,7 @@ class IncrementalChain:
         for root, dirs, files in os.walk(entry_dir):
             for file in files:
                 if file.startswith("pages-") and file.endswith(".img"):
-                    # should we use pathlib for this instead?
+                    # TODO: should we use pathlib for this instead?
                     local_path = os.path.join(root, file)
                     total_size += os.path.getsize(local_path) # gets size in bytes
 
@@ -129,15 +161,33 @@ class IncrementalChain:
         current = checkpoint
         path_index = {c.path: c for c in pool}
 
-        while current.parent_path is not None:
-            current = path_index[current.parent_path]
+        while current is not None and current.parent_path is not None:
+            current = path_index.get(current.parent_path)
+            if current is None:
+                break
             depth += 1
 
         return depth
 
+    def build_dump_cmd(self, pid: int, output_dir: str, prev_dir: str = None) -> str:
+        """Construct CRIU dump command with incremental flags when applicable.
+
+        Args:
+            pid: PID of the process to dump
+            output_dir: directory to write dump images to (-D flag)
+            prev_dir: parent checkpoint directory for incremental dump, or None for full dump
+        """
+        cmd = f"criu dump -t {pid} -v3 --tcp-established --leave-running --track-mem -D {output_dir}"
+        if prev_dir is not None:
+            rel = os.path.relpath(prev_dir, output_dir)
+            cmd += f" --prev-images-dir {rel}"
+        return cmd
+
+    def build_restore_cmd(self) -> str:
+        """Construct CRIU restore command. CRIU follows parent symlinks automatically."""
+        return f"criu restore --restore-detached --tcp-close -d -v3 -D {self.restore_dir}"
+
     def is_full_dump(self) -> bool:
         """Whether the next dump will be full (no parent) or incremental"""
 
-        # TODO: how can we support performing full dumps in the middle of a chain?
-        # Good for performance optimization (e.g. if chain length is 200, might want to do a full dump at 100 instead of incremental dumps for the next 100 checkpoints)
-        return len(self.entries) == 0
+        return len(self.entries) >= self.max_depth or len(self.entries) == 0

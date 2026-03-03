@@ -23,6 +23,26 @@ from typing import Dict, List
 from collections import defaultdict
 import requests
 
+# What does orchestrator.py do?
+
+# orchestrator.py manages all checkpoint/restore decisions.
+
+# State Storage
+# Persistent state is stored via the CRUD class, which talks to an external
+# database service (database-svc) to read/write the orchestrator state. It
+# reads/writes a serialized OrchestratorState object and a CRStrategy object
+# with its checkpoint pool. Every decision reads state with read_state(), modifies it,
+# then writes it back with save_state(). 
+
+# How Pronghorn decides to reuse a snapshot
+# Read orchestrator state from the database
+# Check if orch.strategy.pool is not-empty (pool is a List[Checkpoint])
+# If so, call orch.strategy.checkpoint_to_use(); strategy-dependent (must update)
+# If a checkpoint is selected (not None), the container restores from it; otherwise tell main.py to cold-start
+
+# Selection logic doesn't need to change for incremental deltas; currently weights array
+# and softmax selection still work the same way (this is what full dump does)
+
 CHECKPOINTS_BUCKET = "checkpoints"
 MAX_RETRIES = 3
 
@@ -269,6 +289,9 @@ def on_container_started() -> "tuple[bool, object]":
 
     print("Orchestrator will checkpoint at %s" % orch.state.request_to_checkpoint)
 
+    incremental = getattr(orch.strategy, "incremental", False)
+    max_chain_depth = getattr(orch.strategy, "max_chain_depth", 5)
+
     if save_state(orch):
         return (
             True,
@@ -277,6 +300,8 @@ def on_container_started() -> "tuple[bool, object]":
                 "from_checkpoint": from_checkpoint,
                 "checkpoint_location": checkpoint_location,
                 "will_checkpoint_at": orch.state.request_to_checkpoint,
+                "incremental": incremental,
+                "max_chain_depth": max_chain_depth,
             },
         )
     else:
