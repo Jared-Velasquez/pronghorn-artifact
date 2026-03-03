@@ -12,3 +12,5 @@ multipass.yaml
 data/
 test/
 **/.DS_Store
+.gradle/
+**/bin/
