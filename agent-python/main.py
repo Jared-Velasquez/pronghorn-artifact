@@ -161,7 +161,7 @@ def init():
     if incremental:
         chain = IncrementalChain(
             base_dir="./chain",
-            max_depth=state.get("max_chain_depth", 5),
+            max_chain_length=state.get("max_chain_depth", 5),
         )
     else:
         chain = None
