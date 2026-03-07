@@ -40,6 +40,7 @@ CHECKPOINTS_BUCKET = "checkpoints"
 client: Minio = None
 chain: IncrementalChain = None
 last_checkpoint_path: str = None
+needs_reinit: bool = False
 
 
 def setup_minio():
@@ -80,7 +81,7 @@ def get_java_pid():
 
 
 def after_request(latency):
-    global chain, last_checkpoint_path
+    global chain, last_checkpoint_path, needs_reinit
 
     passed, state = on_container_request(
         float(latency)
@@ -139,7 +140,7 @@ def after_request(latency):
             os.system(f"kill -9 {pid}")
             os.system("killall pypy3")
             print("Killed Python Process")
-            sys.exit(0)
+            needs_reinit = True
     else:
         pass
 
@@ -217,6 +218,11 @@ if __name__ == "__main__":
 
     last_count = 0
     while True:
+        if needs_reinit:
+            needs_reinit = False
+            init()
+            last_count = 0
+
         with open(LOG_FNAME, "r") as fp:
             contents = fp.readlines()
             count = len(contents)

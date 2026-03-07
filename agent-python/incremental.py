@@ -1,5 +1,6 @@
 from typing import List
 import os
+import shutil
 from pathlib import Path
 
 from orchestration.checkpoint import Checkpoint
@@ -56,6 +57,11 @@ class IncrementalChain:
         self.restore_dir = None
         self.restored_depth = 0
         self.max_chain_length = max_chain_length
+
+        if os.path.exists(base_dir):
+            shutil.rmtree(base_dir)
+            print(f"IncrementalChain: cleared stale chain dir {base_dir}")
+        os.makedirs(base_dir)
 
     def setup_for_restore(self, client: Minio, checkpoint: Checkpoint, pool: List[Checkpoint]):
         """Download full ancestor chain from MinIO for this checkpoint
