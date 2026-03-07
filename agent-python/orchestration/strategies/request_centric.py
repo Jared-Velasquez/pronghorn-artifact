@@ -221,6 +221,8 @@ class RequestCentricStrategy(CRStrategy):
 
     def on_request(self, state: WorkloadState):
         request_num = state.request_number - 1
+        if request_num >= len(self.weights):
+            return
         cur_weight = self.weights[request_num]
         if cur_weight == 0:
             self.weights[request_num] = state.latencies[-1]
