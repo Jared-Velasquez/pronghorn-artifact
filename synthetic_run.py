@@ -68,7 +68,7 @@ def check_namespace_pods():
     result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     return int(result.stdout.strip())
 
-user="pronghornae"
+user="jaredvel25"
 
 with open(filename, "a") as output_file:
    for benchmark in BENCHMARKS:

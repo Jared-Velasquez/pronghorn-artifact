@@ -158,13 +158,20 @@ class RequestCentricStrategy(CRStrategy):
             self._prune_pool()
 
         print(f"Exploiting")
-        expanded_pool = self.pool + [None]
 
-        # Incremental Case 
+        # Incremental Case: select from leaves only (checkpoints with no children),
+        # weighted by individual performance. Restoring from a leaf gives the most
+        # up-to-date state; CRIU follows parent symlinks back to the root automatically.
         if self.incremental:
-            weights = [ self._weights_for_chain(chkpt) if chkpt is not None else 0 for chkpt in expanded_pool ]
-        # Default Non Incremental Case 
+            parent_paths = {chkpt.parent_path for chkpt in self.pool if chkpt.parent_path is not None}
+            leaves = [chkpt for chkpt in self.pool if chkpt.path not in parent_paths]
+            if not leaves:
+                leaves = list(self.pool)
+            expanded_pool = leaves + [None]
+            weights = [self._weights_for(chkpt.state.request_number, scalar=True) if chkpt is not None else 0 for chkpt in expanded_pool]
+        # Default Non Incremental Case
         else:
+            expanded_pool = self.pool + [None]
             weights = [ self._weights_for(chkpt.state.request_number if chkpt is not None else 0, scalar=True) for chkpt in expanded_pool ]
 
         weights = np.array(weights)

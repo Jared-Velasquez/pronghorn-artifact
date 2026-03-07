@@ -21,7 +21,7 @@ Options:
 
 Example:
   bash verify_step4.sh \
-    --image pronghornae/bfs \
+    --image jaredvel25/bfs \
     --name bfs-step4-test
 EOF
 }
