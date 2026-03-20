@@ -35,6 +35,7 @@ class RequestCentricStrategy(CRStrategy):
         eps=DEFAULT_EPSILON,
         incremental: bool = False,
         max_chain_depth: int = 5,
+        min_score_ratio: float = 1.0,
     ) -> None:
         super().__init__(workload, pool)
         self.max_capacity = max_capacity
@@ -46,6 +47,7 @@ class RequestCentricStrategy(CRStrategy):
         self.eps = eps
         self.incremental = incremental
         self.max_chain_depth = max_chain_depth
+        self.min_score_ratio = min_score_ratio
 
     @property
     def name(self) -> str:
@@ -81,8 +83,33 @@ class RequestCentricStrategy(CRStrategy):
                 stack.append((child, depth + 1))
         return total_weight
 
+    def _quality_prune_chains(self, roots, children_map):
+        if not roots:
+            return roots
+        scores = {root: self._weights_for_chain(root) for root in roots}
+        max_score = max(scores.values())
+        cutoff = self.min_score_ratio * max_score
+        surviving_roots = []
+        to_delete = set()
+        for root in roots:
+            if scores[root] < cutoff:
+                queue = [root]
+                idx = 0
+                while idx < len(queue):
+                    curr = queue[idx]
+                    to_delete.add(curr)
+                    queue.extend(children_map.get(curr.path, []))
+                    idx += 1
+            else:
+                surviving_roots.append(root)
+        for chkpt in to_delete:
+            chkpt.delete()
+        self.pool[:] = [c for c in self.pool if c not in to_delete]
+        print(f"Quality pruning: removed {len(to_delete)} nodes from {len(roots) - len(surviving_roots)} chains (cutoff={cutoff:.1f}, max={max_score:.1f})")
+        return surviving_roots
+
     def _prune_pool(self):
-        # Default Non Incremental Case 
+        # Default Non Incremental Case
         if not self.incremental:
             output = []
             by_performance = sorted(
@@ -122,6 +149,10 @@ class RequestCentricStrategy(CRStrategy):
 
         # Roots 
         roots = [chkpt for chkpt in self.pool if chkpt.parent_path is None] 
+
+        # Quality pruning: delete inferior chains before capacity fill
+        if self.min_score_ratio > 0 and len(roots) > 1:
+            roots = self._quality_prune_chains(roots, children_map)
 
         # Sort chains based on weight (reversed)
         chains_sorted = sorted(roots, key=self._weights_for_chain, reverse=True)
@@ -269,4 +300,5 @@ class RequestCentricStrategy(CRStrategy):
             "eps": self.eps,
             "incremental": self.incremental,
             "max_chain_depth": self.max_chain_depth,
+            "min_score_ratio": self.min_score_ratio,
         }

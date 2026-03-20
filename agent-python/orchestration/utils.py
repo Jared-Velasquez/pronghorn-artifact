@@ -40,11 +40,13 @@ def cr_deserialize(payload: str, client: Minio):
             max_capacity = int(params.get("max_capacity", str(DEFAULT_MAX_CAPACITY)))
             incremental = params.get("incremental", "false") == "true"
             max_chain_depth = int(params.get("max_chain_depth", "5"))
+            min_score_ratio = float(params.get("min_score_ratio", "1.0"))
             return RequestCentricStrategy(
                 Parameters(), [],
                 max_capacity=max_capacity,
                 incremental=incremental,
                 max_chain_depth=max_chain_depth,
+                min_score_ratio=min_score_ratio,
             )
     obj = json.loads(payload)
     workload = Parameters.deserialize(obj["workload"])
@@ -65,6 +67,7 @@ def cr_deserialize(payload: str, client: Minio):
             eps=obj["eps"],
             incremental=obj.get("incremental", False),
             max_chain_depth=obj.get("max_chain_depth", 5),
+            min_score_ratio=obj.get("min_score_ratio", 1.0),
         )
         strategy.weights = np.array(obj["weights"])
         return strategy

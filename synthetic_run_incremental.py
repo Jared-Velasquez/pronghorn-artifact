@@ -46,13 +46,12 @@ test = BENCHMARKS[0] if BENCHMARKS else "run"
 filename = "data/incremental-" + test + ".csv"
 
 STRATEGIES = [
-    # "cold",
-    # "request_centric&max_capacity=12",
-    # "request_centric&max_capacity=12&incremental=true&max_chain_depth=3",
+    "cold",
+    "request_centric&max_capacity=12",
+    "request_centric&max_capacity=12&incremental=true&max_chain_depth=3",
     "request_centric&max_capacity=12&incremental=true&max_chain_depth=5",
 ]
-# RATES = [20, 4, 1]
-RATES = [20]
+RATES = [20, 4, 1]
 
 ### Configure Logging Handlers
 
@@ -256,6 +255,24 @@ with open(filename, "a") as output_file:
                 output_file.flush()
 
                 plot_run(rows, benchmark, strategy, rate, uid)
+
+                if rows:
+                    client_vals = [r[4] for r in rows]
+                    server_vals = [r[5] for r in rows]
+                    client_arr = sorted(client_vals)
+                    server_arr = sorted(server_vals)
+                    p99_idx = int(0.99 * len(client_arr))
+                    print(
+                        f"\n--- Latency summary: {benchmark} | {strategy} | rate={rate} ---\n"
+                        f"  client (end-to-end, includes restore):\n"
+                        f"    avg={sum(client_arr)/len(client_arr):.0f} µs  "
+                        f"p99={client_arr[min(p99_idx, len(client_arr)-1)]:.0f} µs\n"
+                        f"  server (computation only):\n"
+                        f"    avg={sum(server_arr)/len(server_arr):.0f} µs  "
+                        f"p99={server_arr[min(p99_idx, len(server_arr)-1)]:.0f} µs\n"
+                        f"  restore overhead (avg client - avg server): "
+                        f"{sum(client_arr)/len(client_arr) - sum(server_arr)/len(server_arr):.0f} µs\n"
+                    )
 
                 logger.info(
                     "Completed strategy: %s for benchmark %s with rate %s",
